@@ -2407,11 +2407,21 @@ func (m *redisMeta) doRmdir(ctx Context, parent Ino, name string, pinode *Ino, o
 }
 
 func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst Ino, nameDst string, flags uint32, inode, tInode *Ino, attr, tAttr *Attr) syscall.Errno {
+	whiteout := flags&RenameWhiteout != 0
+	var whiteoutIno Ino
+	if whiteout {
+		ino, err := m.nextInode()
+		if err != nil {
+			return errno(err)
+		}
+		whiteoutIno = ino
+	}
 	exchange := flags == RenameExchange
 	var opened bool
 	var trash, dino Ino
 	var dtyp uint8
 	var tattr Attr
+	var whiteoutAttr Attr
 	var newSpace, newInode int64
 	keys := []string{m.inodeKey(parentSrc), m.entryKey(parentSrc), m.inodeKey(parentDst), m.entryKey(parentDst)}
 	if parentSrc.IsTrash() {
@@ -2520,6 +2530,24 @@ func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentD
 		if st := m.Access(ctx, parentDst, MODE_MASK_W|MODE_MASK_X, &dattr); st != 0 {
 			return st
 		}
+		if whiteout {
+			whiteoutAttr = Attr{
+				Typ:    TypeCharDev,
+				Uid:    ctx.Uid(),
+				Gid:    m.inheritGid(ctx, TypeCharDev, sattr.Gid, sattr.Mode),
+				Nlink:  1,
+				Parent: parentSrc,
+				Full:   true,
+				Tier:   sattr.Tier,
+			}
+			whiteoutAttr.Mode = m.inheritMode(ctx, TypeCharDev, sattr.Gid, sattr.Mode, 0)
+			if (sattr.Flags & FlagSkipTrash) != 0 {
+				whiteoutAttr.Flags |= FlagSkipTrash
+			}
+			if m.checkGroupQuota(ctx, uint64(whiteoutAttr.Gid), align4K(0), 1) {
+				return syscall.EDQUOT
+			}
+		}
 		// TODO: check parentDst is a subdir of source node
 		if ino == parentDst || ino == dattr.Parent {
 			return syscall.EPERM
@@ -2535,6 +2563,18 @@ func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentD
 
 		var supdate, dupdate bool
 		now := time.Now()
+		if whiteout {
+			whiteoutAttr.Atime = now.Unix()
+			whiteoutAttr.Atimensec = uint32(now.Nanosecond())
+			whiteoutAttr.Mtime = now.Unix()
+			whiteoutAttr.Mtimensec = uint32(now.Nanosecond())
+			whiteoutAttr.Ctime = now.Unix()
+			whiteoutAttr.Ctimensec = uint32(now.Nanosecond())
+			supdate = true
+			if parentSrc == parentDst {
+				dupdate = true
+			}
+		}
 		if dino > 0 {
 			if rs[3] == nil {
 				logger.Warnf("no attribute for inode %d (%d, %s)", dino, parentDst, nameDst)
@@ -2695,6 +2735,12 @@ func (m *redisMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentD
 						pipe.HDel(ctx, m.dirQuotaUsedSpaceKey(), field)
 						pipe.HDel(ctx, m.dirQuotaUsedInodesKey(), field)
 					}
+				}
+				if whiteout {
+					pipe.Set(ctx, m.inodeKey(whiteoutIno), m.marshal(&whiteoutAttr), 0)
+					pipe.HSet(ctx, m.entryKey(parentSrc), nameSrc, m.packEntry(TypeCharDev, whiteoutIno))
+					pipe.IncrBy(ctx, m.usedSpaceKey(), align4K(0))
+					pipe.Incr(ctx, m.totalInodesKey())
 				}
 			}
 			if parentDst != parentSrc {

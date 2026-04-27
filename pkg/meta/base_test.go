@@ -97,7 +97,65 @@ func TestRedisClient(t *testing.T) {
 	if err != nil || m.Name() != "redis" {
 		t.Fatalf("create meta: %s", err)
 	}
+	testRedisRenameWhiteout(t, m)
 	testMeta(t, m)
+}
+
+func testRedisRenameWhiteout(t *testing.T, m Meta) {
+	if err := m.Reset(); err != nil {
+		t.Fatalf("reset meta: %s", err)
+	}
+	if err := m.Init(testFormat(), false); err != nil {
+		t.Fatalf("init error: %s", err)
+	}
+
+	ctx := NewContext(1000, 1000, []uint32{1000})
+	attr := &Attr{}
+	var parent Ino
+	if st := m.Mkdir(ctx, RootInode, "whiteout", 0755, 022, 0, &parent, attr); st != 0 {
+		t.Fatalf("mkdir whiteout: %s", st)
+	}
+	var src Ino
+	if st := m.Create(ctx, parent, "src", 0644, 022, 0, &src, attr); st != 0 {
+		t.Fatalf("create src: %s", st)
+	}
+	_ = m.Close(ctx, src)
+
+	var renamed Ino
+	if st := m.Rename(ctx, parent, "src", parent, "dst", RenameWhiteout, &renamed, attr); st != 0 {
+		t.Fatalf("rename src -> dst with whiteout: %s", st)
+	}
+	if renamed != src {
+		t.Fatalf("renamed inode: %d, want %d", renamed, src)
+	}
+	if st := m.Lookup(ctx, parent, "dst", &renamed, attr, false); st != 0 {
+		t.Fatalf("lookup dst: %s", st)
+	}
+	if renamed != src || attr.Typ != TypeFile {
+		t.Fatalf("dst = (%d, %s), want (%d, regular)", renamed, typeToString(attr.Typ), src)
+	}
+	var whiteout Ino
+	if st := m.Lookup(ctx, parent, "src", &whiteout, attr, false); st != 0 {
+		t.Fatalf("lookup src whiteout: %s", st)
+	}
+	if attr.Typ != TypeCharDev || attr.Rdev != 0 || attr.Nlink != 1 || attr.Parent != parent {
+		t.Fatalf("whiteout attr: %+v", attr)
+	}
+
+	var src2 Ino
+	if st := m.Create(ctx, parent, "src2", 0644, 022, 0, &src2, attr); st != 0 {
+		t.Fatalf("create src2: %s", st)
+	}
+	_ = m.Close(ctx, src2)
+	if st := m.Rename(ctx, parent, "src2", parent, "dst", RenameNoReplace|RenameWhiteout, nil, nil); st != syscall.EEXIST {
+		t.Fatalf("rename no-replace with whiteout: %s", st)
+	}
+	if st := m.Lookup(ctx, parent, "src2", &src2, attr, false); st != 0 {
+		t.Fatalf("lookup src2: %s", st)
+	}
+	if attr.Typ != TypeFile {
+		t.Fatalf("src2 type after failed rename: %s", typeToString(attr.Typ))
+	}
 }
 
 func TestKeyDB(t *testing.T) { // skip mutate
@@ -738,7 +796,7 @@ func testMetaClient(t *testing.T, m Meta) {
 	} else if string(entries[0].Name) != "." || string(entries[1].Name) != ".." || string(entries[2].Name) != "f" {
 		t.Fatalf("entries: %+v", entries)
 	}
-	if st := m.Rename(ctx, parent, "f", 1, "f2", RenameWhiteout, &inode, attr); st != syscall.ENOTSUP {
+	if st := m.Rename(ctx, parent, "f", 1, "f2", RenameExchange|RenameWhiteout, &inode, attr); st != syscall.EINVAL {
 		t.Fatalf("rename d/f -> f2: %s", st)
 	}
 	if st := m.Rename(ctx, parent, "f", 1, "f2", 0, &inode, attr); st != 0 {

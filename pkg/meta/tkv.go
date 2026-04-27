@@ -2090,6 +2090,9 @@ func (m *kvMeta) doRmdir(ctx Context, parent Ino, name string, pinode *Ino, oldA
 }
 
 func (m *kvMeta) doRename(ctx Context, parentSrc Ino, nameSrc string, parentDst Ino, nameDst string, flags uint32, inode, tInode *Ino, attr, tAttr *Attr) syscall.Errno {
+	if flags&RenameWhiteout != 0 {
+		return syscall.ENOTSUP
+	}
 	var trash Ino
 	if st := m.checkTrash(parentDst, &trash); st != 0 {
 		return st

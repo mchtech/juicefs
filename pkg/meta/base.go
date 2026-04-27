@@ -1883,9 +1883,7 @@ func (m *baseMeta) Rename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 	}
 
 	switch flags {
-	case 0, RenameNoReplace, RenameExchange, RenameNoReplace | RenameRestore:
-	case RenameWhiteout, RenameNoReplace | RenameWhiteout:
-		return syscall.ENOTSUP
+	case 0, RenameNoReplace, RenameExchange, RenameNoReplace | RenameRestore, RenameWhiteout, RenameNoReplace | RenameWhiteout:
 	default:
 		return syscall.EINVAL
 	}
@@ -1935,6 +1933,9 @@ func (m *baseMeta) Rename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 		if quotaDst > 0 && m.checkDirQuota(ctx, parentDst, space, inodes) {
 			return syscall.EDQUOT
 		}
+	}
+	if flags&RenameWhiteout != 0 && quotaSrc > 0 && m.checkDirQuota(ctx, parentSrc, align4K(0), 1) {
+		return syscall.EDQUOT
 	}
 	tinode := new(Ino)
 	tattr := new(Attr)
@@ -1987,6 +1988,14 @@ func (m *baseMeta) Rename(ctx Context, parentSrc Ino, nameSrc string, parentDst 
 					m.updateDirQuota(ctx, parentSrc, align4K(diffLength), 1)
 				}
 			}
+		}
+		if flags&RenameWhiteout != 0 {
+			m.en.updateStats(align4K(0), 1)
+			m.updateDirStat(ctx, parentSrc, 0, align4K(0), 1)
+			if quotaSrc > 0 {
+				m.updateDirQuota(ctx, parentSrc, align4K(0), 1)
+			}
+			m.updateUserGroupStat(ctx, ctx.Uid(), ctx.Gid(), align4K(0), 1)
 		}
 	}
 	return st
