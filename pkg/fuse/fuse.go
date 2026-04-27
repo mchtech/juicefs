@@ -230,12 +230,19 @@ func (fs *fileSystem) RemoveXAttr(cancel <-chan struct{}, header *fuse.InHeader,
 func (fs *fileSystem) Create(cancel <-chan struct{}, in *fuse.CreateIn, name string, out *fuse.CreateOut) (code fuse.Status) {
 	ctx := fs.newContext(cancel, &in.InHeader)
 	defer releaseContext(ctx)
-	entry, fh, err := fs.v.Create(ctx, Ino(in.NodeId), name, uint16(in.Mode), getCreateUmask(in.Umask, fs.v.Conf.UMask), in.Flags)
+	entry, fh, err := fs.v.Create(ctx, Ino(in.NodeId), name, uint16(in.Mode), getCreateUmask(in.Umask, fs.v.Conf.UMask), tmpfileFlags(name, in.Mode, in.Flags))
 	if err != 0 {
 		return fuse.Status(err)
 	}
 	out.Fh = fh
 	return fs.replyEntry(ctx, &out.EntryOut, entry)
+}
+
+func tmpfileFlags(name string, mode, flags uint32) uint32 {
+	if runtime.GOOS == "linux" && name == "/" && mode&syscall.S_IFMT == syscall.S_IFREG {
+		return flags | vfs.O_TMPFILE
+	}
+	return flags
 }
 
 func (fs *fileSystem) Open(cancel <-chan struct{}, in *fuse.OpenIn, out *fuse.OpenOut) (status fuse.Status) {

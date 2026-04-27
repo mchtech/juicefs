@@ -157,6 +157,21 @@ func waitMountpoint(mp string) chan error {
 	return ch
 }
 
+func TestTmpfileFlags(t *testing.T) {
+	flags := tmpfileFlags("/", syscall.S_IFREG|0644, syscall.O_WRONLY|syscall.O_LARGEFILE)
+	if flags&vfs.O_TMPFILE == 0 {
+		t.Fatalf("O_TMPFILE is not set: %#o", flags)
+	}
+	flags = tmpfileFlags("file", syscall.S_IFREG|0644, syscall.O_WRONLY|syscall.O_LARGEFILE)
+	if flags&vfs.O_TMPFILE != 0 {
+		t.Fatalf("O_TMPFILE should not be set: %#o", flags)
+	}
+	flags = tmpfileFlags("/", syscall.S_IFDIR|0755, syscall.O_WRONLY|syscall.O_LARGEFILE)
+	if flags&vfs.O_TMPFILE != 0 {
+		t.Fatalf("O_TMPFILE should not be set for non-regular file: %#o", flags)
+	}
+}
+
 func setUp(metaUrl, mp string) error {
 	format(metaUrl)
 	go mount(metaUrl, mp)
